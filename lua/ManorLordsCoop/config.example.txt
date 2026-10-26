@@ -1,0 +1,6 @@
+# Manor Lords Co-op settings. Copy to config.txt (the installer does it for you).
+role = off             # host, join or off
+address = 127.0.0.1    # guest: the host's address
+port = 27015
+lord =                 # your lord's name
+region =               # guest: preferred region (name or tag), optional
