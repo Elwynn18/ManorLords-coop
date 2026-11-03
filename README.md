@@ -7,8 +7,9 @@ Chacun construit chez soi, et voit en direct les constructions de l'autre.
 *English summary: a co-op mod for Manor Lords where each player is a separate lord with their own
 region on one shared map. See "Comment ça marche" for the design; PROTOCOL.md for the wire format.*
 
-> **État : version 0.1.0, expérimentale.** Testée en laboratoire (deux copies du jeu sur un même PC,
-> pilotées par un robot de test), **pas encore en vraie partie entre deux PC**. Lisez « Limites connues ».
+> **État : version 0.2.0, expérimentale.** Portée sur le build Steam 26185246. Testée en laboratoire
+> (deux copies du jeu sur un même PC, pilotées par un robot de test) et par un joueur à la souris sur
+> un même PC, **pas encore en vraie partie entre deux PC**. Lisez « Limites connues ».
 
 ## Version du jeu
 
@@ -17,8 +18,8 @@ Le mod ne fonctionne qu'avec **une version précise du jeu**, et refuse de déma
 | | |
 |---|---|
 | Jeu | Manor Lords, Steam (app 1363080) |
-| Version | 0.8.104, build Steam 24905706 |
-| Exécutable | `ManorLords-Win64-Shipping.exe`, SHA-256 `813c4909dbe8bef3481469137c66f35cc23dec11c145b6963c4739b41539e621` |
+| Version | build Steam 26185246 (Unreal Engine 5.5.4) |
+| Exécutable | `ManorLords-Win64-Shipping.exe`, SHA-256 `560451df38cd91134026c25b69539449c570f3163e33bc8c45b4dc20b6952cee` |
 | Systèmes | Windows 10/11 64 bits, ou Linux avec Proton |
 
 Les deux joueurs doivent avoir **la même version du jeu et du mod** : à la connexion, l'hôte refuse
@@ -26,7 +27,7 @@ un invité dont la version diffère, avec un message clair.
 
 ## Installation
 
-1. Décompressez l'archive `ManorLords-Coop-0.1.0.zip` n'importe où.
+1. Décompressez l'archive `ManorLords-Coop-0.2.0.zip` n'importe où.
 2. **Windows** : double-cliquez sur `ManorLords-Coop.bat`.
    **Linux (Proton)** : lancez `./manorlords-coop.sh` dans un terminal.
 3. L'installateur trouve le jeu, vérifie sa version, installe UE4SS (inclus dans l'archive, version
@@ -104,15 +105,36 @@ region =               # invité : région souhaitée (nom ou étiquette), facul
   de l'autre joueur sont simulés chez vous et peuvent ne pas être exactement au même endroit que
   chez lui. Ce qui compte (qui possède quoi, quels bâtiments, où) est synchronisé.
 
-## Limites connues (0.1.0)
+## Changements en 0.2.0
 
-- **Jamais testé entre deux vrais PC**, ni avec un joueur humain : tous les tests ont été faits en
-  laboratoire, avec un robot. Le premier essai réel servira à trouver ce qui manque.
+- **Portage sur le build Steam 26185246** : les huit fonctions natives et tous les décalages mémoire
+  ont été retrouvés dans le nouvel exécutable (méthode et tableau complet : `docs/PORTING.md`). Le
+  prologue de `commitRoad` a changé : le crochet y prend désormais 15 octets.
+- **Plantage corrigé** : `commitField` et `commitRoad` renvoient l'objet qu'ils créent, et le jeu
+  s'en sert. Les crochets 0.1.0 étaient déclarés `void` : après une vraie route tracée à la souris,
+  l'écriture du rapport écrasait `rax` et le jeu recevait un pointeur invalide (plantage plus tard,
+  en survolant un bâtiment). Les crochets renvoient maintenant la valeur d'origine.
+- **Sécurité** : seul un invité accepte des fichiers, et seulement ceux du monde partagé
+  (`coop_world*`). Avant, un pair pouvait écraser n'importe quelle sauvegarde.
+- Le journal (`status.txt`) note la version du jeu chez l'hôte et chaque démolition reçue.
+- Laboratoire : `test/run-pair.ps1` (Windows, deux copies du jeu sur un PC), scénarios `manual`
+  (un humain joue, le mod journalise le survol) et `hoverrm` (survol + démolition à distance),
+  commandes natives `hover` et `peek`. Le comptage `roads` ignore les routes fantômes à l'origine.
+- Construction sous Windows sans SDK : `native/build.ps1` (clang et lld de Zig).
+
+## Limites connues (0.2.0)
+
+- **Jamais testé entre deux vrais PC** : les tests ont été faits sur un seul PC (robot, puis un
+  joueur à la souris). Le premier essai réel servira à trouver ce qui manque.
 - **Connexion directe uniquement** (adresse IP + port) : pas encore d'invitation Steam.
 - **Deux joueurs** seulement (un invité).
-- Les **champs, pâturages, parcelles d'habitation et routes dessinés à la souris** sont capturés par
-  le même mécanisme que les tests, mais ce déclencheur précis (un humain qui valide un dessin) n'a
-  pas pu être testé sans souris dans le laboratoire.
+- Routes, champs, parcelles d'habitation et bâtiments posés **à la souris** ont été reproduits dans
+  les deux sens lors d'un essai sur un PC. La correction du plantage décrit plus haut attend encore
+  la confirmation d'un deuxième essai à la souris.
+- Un plantage **intermittent** a été vu une fois (sur une dizaine d'essais), au moment où le script
+  de test ferme de force les fenêtres du jeu : la boucle des décalques de route des bâtiments
+  proches (`closeBuildings`) a trouvé une entrée nulle dans `roadDecals`. Aucun état anormal n'a été
+  trouvé pendant le jeu ; on ne sait pas encore si le jeu sans mod fait de même à la fermeture forcée.
 - Pas encore synchronisés : avancement des chantiers (un bâtiment de l'autre joueur apparaît
   directement terminé chez vous), **améliorations** de bâtiments, extensions de parcelles (jardins),
   stocks, villageois, armées, raids, commerce entre joueurs, trésor et influence.
@@ -127,13 +149,16 @@ region =               # invité : région souhaitée (nom ou étiquette), facul
 ## Construire depuis les sources
 
 - `native/build.sh` : construit `coopnative.dll` avec `clang-cl` et `lld-link` (aucune dépendance
-  à la bibliothèque C ni au SDK Windows).
+  à la bibliothèque C ni au SDK Windows). Sous Windows : `native/build.ps1` (Zig, variable `ZIG`).
 - `lua/ManorLordsCoop/` : le mod Lua pour UE4SS.
 - `release.sh` : construit l'archive de distribution.
+- `docs/PORTING.md` et `tools/re/` : comment retrouver fonctions et décalages après une mise à jour
+  du jeu.
 
 Les tests (deux copies du jeu sans fenêtre, robot de test, comparaison automatique) vivent dans le
 dépôt de l'auteur et sont décrits dans le compte-rendu
-[coop-anything](https://github.com/cranebeaker/coop-anything) (`games/manor-lords/`).
+[coop-anything](https://github.com/cranebeaker/coop-anything) (`games/manor-lords/`). Sous Windows,
+`test/run-pair.ps1 <scénario>` lance l'hôte et l'invité sur le même PC et compare leurs lignes STATE.
 
 ## Licence
 

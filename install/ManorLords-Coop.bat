@@ -16,7 +16,7 @@ exit /b
 # Options : install | uninstall  -GameDir <dossier>  -Yes
 # ---------------------------------------------------------------------------------------------
 $AppId = 1363080
-$ExeSha = '813c4909dbe8bef3481469137c66f35cc23dec11c145b6963c4739b41539e621'
+$ExeSha = '560451df38cd91134026c25b69539449c570f3163e33bc8c45b4dc20b6952cee'
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
 $Here = $env:COOP_HERE
@@ -99,8 +99,8 @@ if ($Action -eq 'uninstall') {
 # ------------------------------------------------------------------ installer
 Write-Host '  vérification de la version du jeu…'
 $got = (Get-FileHash -Algorithm SHA256 $Exe).Hash.ToLower()
-if ($got -ne $ExeSha) { Die "version du jeu non prise en charge (empreinte $got). Ce mod demande Manor Lords 0.8.104, build Steam 24905706." }
-Ok 'version du jeu : 0.8.104 (build 24905706)'
+if ($got -ne $ExeSha) { Die "version du jeu non prise en charge (empreinte $got). Ce mod demande Manor Lords, build Steam 26185246." }
+Ok 'version du jeu : build Steam 26185246'
 
 $ue = Join-Path $Win64 'ue4ss\UE4SS.dll'
 if ((Test-Path $ue) -and (Test-Path (Join-Path $Win64 'dwmapi.dll'))) {

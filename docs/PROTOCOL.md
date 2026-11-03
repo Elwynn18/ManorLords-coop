@@ -9,10 +9,10 @@ of a unit.
 
 | Direction | Message | Meaning |
 |---|---|---|
-| guest -> host | `HELLO <proto> <modVersion> <gameVersion> <lord>` | `gameVersion` is the escaped `GI.Version` string ("Version 0.8.104") |
+| guest -> host | `HELLO <proto> <modVersion> <gameVersion> <lord>` | `gameVersion` is the escaped `GI.Version` string; both sides must match |
 | host -> guest | `WELCOME <proto> <modVersion>` | accepted; the world follows |
 | host -> guest | `REFUSE <reason> [detail]` | `mod_version`, `game_version`, `lord_name_taken`; host closes nothing, guest stops |
-| host -> guest | `FILE <name> <length>` + `length` raw bytes | a file of the save folder: `coop_world.sav`, `coop_world_descr.sav`, `coop_world_coat_N.png` |
+| host -> guest | `FILE <name> <length>` + `length` raw bytes | a file of the save folder: `coop_world.sav`, `coop_world_descr.sav`, `coop_world_coat_N.png`; the guest refuses any other name, the host refuses every file |
 | host -> guest | `REGION <tag> <owner\|-> <settled 0/1>` | the host's ownership table (one per region) |
 | host -> guest | `HOST_LORD <lord>` | the host's lord name (the save does not keep the pawn's name) |
 | host -> guest | `WORLD_SENT <slot>` | all world files and tables sent |
@@ -34,6 +34,8 @@ of a unit.
 
 `ping`, `build`, `buildlocal`, `fieldbuild`, `testfield`, `srand`, `cursor`, `remote 0|1`,
 `net host <port>`, `net join <ip> <port>`, `net send <text>`, `net sendfile <name>`.
+Lab only: `hover <pawn> <building|0>` (what the cursor does: the pawn's hovered building changes),
+`peek <building>` (logs whether the building and its marker component still look alive).
 Outbox lines (native -> Lua): `setup 0x<addr> <id> <type> local|remote|field|road`,
 `fielddata 0x<addr> <payload>`, `road 0x<pawn> <payload>`.
 Inbox lines: `NATIVE ready|refused ...`, `NET listening|connecting|connected|disconnected|error ...`,

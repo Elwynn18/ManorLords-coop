@@ -1,8 +1,8 @@
 // coopnative.dll - native half of the Manor Lords co-op mod (UE4SS Lua mod "ManorLordsCoop").
 //
 // Loaded by the Lua mod with package.loadlib(path, "*"). It
-//   1. checks the game build byte for byte (only Steam build 24905706, shipping exe sha256
-//      813c4909...); on any mismatch it installs nothing and says so in its log;
+//   1. checks the game build byte for byte (only Steam build 26185246, shipping exe sha256
+//      560451df...); on any mismatch it installs nothing and says so in its log;
 //   2. replaces the exec thunk of the debug UFunction ASMUnit:writeUnitDebugLog(FString) so the
 //      Lua side can send it text commands that run on the game thread;
 //   3. hooks SetupBuilding to report every building the game sets up (outbox file);
@@ -41,6 +41,7 @@ __declspec(dllimport) void __stdcall EnterCriticalSection(void *);
 __declspec(dllimport) void __stdcall LeaveCriticalSection(void *);
 __declspec(dllimport) int __stdcall DeleteFileW(const wchar *);
 __declspec(dllimport) int __stdcall MoveFileExW(const wchar *, const wchar *, u32);
+__declspec(dllimport) u64 __stdcall VirtualQuery(const void *, void *, u64);
 
 typedef u64 SOCKET;
 #define INVALID_SOCKET ((SOCKET)~0ull)
@@ -64,7 +65,29 @@ void *memset(void *d, int c, u64 n) { u8 *p = d; while (n--) *p++ = (u8)c; retur
 void *memcpy(void *d, const void *s, u64 n) { u8 *p = d; const u8 *q = s; while (n--) *p++ = *q++; return d; }
 int _fltused = 0;
 
-#define MOD_VERSION "0.1.0"
+#define MOD_VERSION "0.2.0"
+
+// ------------------------------------------------------------------ game layout (build 26185246)
+// ASMBuildingMaster
+#define B_TYPE      0x3b8   // Data.bType
+#define B_FLAG      0x3c1   // Data.constructed
+#define B_ID        0x3e0   // building id (spawnBuilding assigns it)
+#define B_WORKERS   0x4c0   // fieldWorkersNeeded
+#define B_FIELDPTS  0x660   // FieldPoints (TArray<FVector>)
+#define B_CLOCKWISE 0x670   // borderIsClockwise
+#define B_TRIANG    0x678   // fieldPointsTriangulated (finishBuilding's argument)
+#define B_BORDER    0x6a8   // fieldBorderPoints (TArray<FVector>)
+#define B_MARKERS   0xb98   // instanced mesh component SetupBuilding creates (fn 0x4d4d040); not a UPROPERTY
+// APawnCPP
+#define P_CURSOR    0x658   // ground point under the cursor (FVector)
+#define P_ROADPTS   0x780   // roadPoints (TArray<FVector>)
+#define P_ROADSTART 0x7a8   // roadStartPos
+#define P_PLOTTYPE  0xe78   // placePlotType
+#define P_ISMARKET  0xe7a
+#define P_ISEXT     0xe7b   // isExtension
+#define P_FIELDPTS  0xe90   // FieldPoints (TArray<FFieldPoint>, 0x38 bytes, position at +0x10)
+#define P_CLOSED    0xef0   // fieldClosed
+#define P_WORKERS   0xf10   // fieldWorkersNeeded
 
 // ------------------------------------------------------------------ small string helpers
 static int wlen(const wchar *s) { int n = 0; while (s[n]) n++; return n; }
@@ -129,16 +152,17 @@ static void inbox(const char *s) { line_t l = {0}; ls(&l, s); lend_to(&l, g_in_p
 // ------------------------------------------------------------------ game build check
 static u8 *g_base;
 typedef struct { const char *name; u32 rva; u8 bytes[16]; } sig_t;
-enum { S_THUNK, S_SPAWN, S_FRO, S_SETUP, S_FINISH, S_FIELD, S_ROAD, S_GROW, S_COUNT };
+enum { S_THUNK, S_SPAWN, S_FRO, S_SETUP, S_FINISH, S_FIELD, S_ROAD, S_GROW, S_HOVER, S_COUNT };
 static sig_t g_sigs[S_COUNT] = {
-    {"exec_writeUnitDebugLog", 0x4a9ed90, {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x30,0x33}},
-    {"spawnBuilding",          0x4c24b10, {0x40,0x53,0x55,0x56,0x57,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0xe8,0x00,0x00,0x00}},
-    {"findRegionAndOwner",     0x4cb7540, {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x7c,0x24,0x10,0x55,0x48,0x8d,0x6c,0x24,0xa9}},
-    {"SetupBuilding",          0x4c9a720, {0x4c,0x8b,0xdc,0x55,0x49,0x8d,0xab,0xf8,0xfd,0xff,0xff,0x48,0x81,0xec,0x00,0x03}},
-    {"finishBuilding",         0x4cb5020, {0x4c,0x8b,0xdc,0x55,0x49,0x8d,0xab,0xa8,0xfe,0xff,0xff,0x48,0x81,0xec,0x50,0x02}},
-    {"commitField",            0x4acf830, {0x4c,0x8b,0xdc,0x55,0x57,0x49,0x8d,0xab,0x58,0xfe,0xff,0xff,0x48,0x81,0xec,0x98}},   // + 02 00 00
-    {"commitRoad",             0x4ad09f0, {0x40,0x55,0x56,0x48,0x8d,0xac,0x24,0xe8,0xfe,0xff,0xff,0x48,0x81,0xec,0x18,0x02}},   // + 00 00
-    {"TArray<FVector>::ResizeGrow", 0x10b91f0, {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x30,0x48}},
+    {"exec_writeUnitDebugLog", 0x4afd810, {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x30,0x33}},
+    {"spawnBuilding",          0x4ca1bb0, {0x40,0x53,0x55,0x56,0x57,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0xe8,0x00,0x00,0x00}},
+    {"findRegionAndOwner",     0x4d39b40, {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x7c,0x24,0x10,0x55,0x48,0x8d,0x6c,0x24,0xa9}},
+    {"SetupBuilding",          0x4d1a650, {0x4c,0x8b,0xdc,0x55,0x49,0x8d,0xab,0xe8,0xfd,0xff,0xff,0x48,0x81,0xec,0x10,0x03}},
+    {"finishBuilding",         0x4d37620, {0x4c,0x8b,0xdc,0x55,0x49,0x8d,0xab,0xa8,0xfe,0xff,0xff,0x48,0x81,0xec,0x50,0x02}},
+    {"commitField",            0x4b35700, {0x4c,0x8b,0xdc,0x55,0x57,0x49,0x8d,0xab,0x58,0xfe,0xff,0xff,0x48,0x81,0xec,0x98}},   // + 02 00 00
+    {"commitRoad",             0x4b368c0, {0x40,0x55,0x53,0x56,0x57,0x41,0x57,0x48,0x8d,0xac,0x24,0x00,0xff,0xff,0xff,0x48}},   // + 81 ec
+    {"TArray<FVector>::ResizeGrow", 0x10c2af0, {0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x30,0x48}},
+    {"setHoveredBuilding",     0x4b6ef70, {0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,0xec,0x20,0x48,0x8b,0x81,0x10,0x07,0x00}},   // reads pawn+0x710
 };
 
 static int check_build(void) {
@@ -156,7 +180,7 @@ static int check_build(void) {
     u8 *cf = g_base + g_sigs[S_FIELD].rva;
     if (cf[16] != 0x02 || cf[17] != 0x00 || cf[18] != 0x00) { ls(&l, "check commitField tail MISMATCH"); lend(&l); ok = 0; }
     u8 *cr = g_base + g_sigs[S_ROAD].rva;
-    if (cr[16] != 0x00 || cr[17] != 0x00) { ls(&l, "check commitRoad tail MISMATCH"); lend(&l); ok = 0; }
+    if (cr[16] != 0x81 || cr[17] != 0xec) { ls(&l, "check commitRoad tail MISMATCH"); lend(&l); ok = 0; }
     return ok;
 }
 
@@ -237,19 +261,17 @@ static setup_fn g_setup_orig;
 static void report_building(void *b) {
     line_t l = {0};
     ls(&l, "setup "); lhex(&l, (u64)b);
-    ls(&l, " "); ldec(&l, *(int *)((u8 *)b + 0x3d0));   // building id
-    ls(&l, " "); ldec(&l, *(int *)((u8 *)b + 0x3a8));   // building type
+    ls(&l, " "); ldec(&l, *(int *)((u8 *)b + B_ID));
+    ls(&l, " "); ldec(&l, *(int *)((u8 *)b + B_TYPE));
     ls(&l, g_in_cmd ? " remote" : (g_in_commit == 2 ? " road" : (g_in_commit ? " field" : " local")));
     lend_to(&l, g_out_path);
 }
 // a building made by a player's commitField (field, pasture, market, residential plot): dump the
-// state commitField gave it, before SetupBuilding uses it. Offsets (ASMBuildingMaster):
-//   0x488 fieldWorkersNeeded, 0x3b1 flag, 0x5f0 borderIsClockwise,
-//   0x5e0 FieldPoints (TArray<FVector>), 0x628 fieldBorderPoints (TArray<FVector>),
-//   0x880..0x8b0 and 0x9a0..0xa60: residential plot geometry (doubles)
-#define FB_G1 0x880
+// state commitField gave it, before SetupBuilding uses it (B_* offsets above), plus two blocks of
+// residential plot geometry (doubles) that commitField copies in
+#define FB_G1 0x938
 #define FB_G1N 0x30
-#define FB_G2 0x9a0
+#define FB_G2 0xa60
 #define FB_G2N 0xc0
 static struct { char buf[24000]; u32 n; } g_big;
 static void big_s(const char *s) { while (*s && g_big.n < sizeof(g_big.buf) - 2) g_big.buf[g_big.n++] = *s++; }
@@ -274,16 +296,16 @@ static void dump_field(void *b) {
     u8 *p = (u8 *)b;
     g_big.n = 0;
     big_s("fielddata 0x"); { line_t t = {0}; lhex(&t, (u64)b); t.buf[t.n] = 0; big_s(t.buf + 2); }
-    big_s(" "); big_i(*(int *)(p + 0x488)); big_s(" "); big_i(p[0x3b1]); big_s(" "); big_i(p[0x5f0]);
-    big_s(" P"); big_pts(p + 0x5e0);
-    big_s(" B"); big_pts(p + 0x628);
+    big_s(" "); big_i(*(int *)(p + B_WORKERS)); big_s(" "); big_i(p[B_FLAG]); big_s(" "); big_i(p[B_CLOCKWISE]);
+    big_s(" P"); big_pts(p + B_FIELDPTS);
+    big_s(" B"); big_pts(p + B_BORDER);
     big_s(" H"); big_hex(p + FB_G1, FB_G1N); big_hex(p + FB_G2, FB_G2N);
     g_big.buf[g_big.n++] = '\n';
     EnterCriticalSection(g_lock); append_file(g_out_path, g_big.buf, g_big.n); LeaveCriticalSection(g_lock);
 }
 static void hook_setup(void *b) {
     // any building that arrives with a shape (player fields/plots, AI plots): send its shape too
-    if (b && !g_in_cmd && g_in_commit != 2 && (g_in_commit || *(int *)((u8 *)b + 0x630) > 0)) dump_field(b);
+    if (b && !g_in_cmd && g_in_commit != 2 && (g_in_commit || *(int *)((u8 *)b + B_BORDER + 8) > 0)) dump_field(b);
     g_setup_orig(b);
     if (b) report_building(b);
 }
@@ -297,52 +319,53 @@ static void put_points(line_t *l, u8 *data, int num, int stride, int off) {
     }
 }
 
-// commitField(pawn): the player's drawn area, before the game consumes it
-//   pawn+0xf20 placePlotType, +0xf22 isMarket, +0xf23 isExtension, +0xfb8 fieldWorkersNeeded,
-//   +0xf38/+0xf40 FieldPoints (FFieldPoint, 0x38 bytes, position at +0x10), +0xf98 fieldClosed
-typedef void (*pawn_fn)(void *pawn);
+// commitField(pawn): the player's drawn area (P_* offsets above), before the game consumes it.
+// commitField and commitRoad return the object they made (the caller uses it): pass it through.
+typedef void *(*pawn_fn)(void *pawn);
 static pawn_fn g_field_orig, g_road_orig;
-static void hook_field(void *pawn) {
+static void *hook_field(void *pawn) {
     if (!g_in_cmd && pawn) {
         u8 *p = (u8 *)pawn;
         line_t l = {0};
         ls(&l, "field "); lhex(&l, (u64)pawn);
-        ls(&l, " "); ldec(&l, p[0xf20]); ls(&l, " "); ldec(&l, p[0xf22]); ls(&l, " "); ldec(&l, p[0xf23]);
-        ls(&l, " "); ldec(&l, *(int *)(p + 0xfb8)); ls(&l, " "); ldec(&l, p[0xf98]);
-        int n = *(int *)(p + 0xf40);
+        ls(&l, " "); ldec(&l, p[P_PLOTTYPE]); ls(&l, " "); ldec(&l, p[P_ISMARKET]); ls(&l, " "); ldec(&l, p[P_ISEXT]);
+        ls(&l, " "); ldec(&l, *(int *)(p + P_WORKERS)); ls(&l, " "); ldec(&l, p[P_CLOSED]);
+        int n = *(int *)(p + P_FIELDPTS + 8);
         if (n > 60) n = 60;
-        put_points(&l, *(u8 **)(p + 0xf38), n, 0x38, 0x10);
+        put_points(&l, *(u8 **)(p + P_FIELDPTS), n, 0x38, 0x10);
         lend_to(&l, g_out_path);
         g_in_commit = 1;
     }
-    g_field_orig(pawn);
+    void *made = g_field_orig(pawn);
     g_in_commit = 0;
+    return made;
 }
-// commitRoad(pawn): pawn+0x790/+0x798 roadPoints (FVector), +0x7b8 roadStartPos, +0x7d0 roadStarted.
+// commitRoad(pawn): roadPoints (FVector) and roadStartPos on the pawn.
 // A successful commit empties roadPoints; a refused one leaves them. Report only successes.
 static line_t g_road_line;
-static void hook_road(void *pawn) {
+static void *hook_road(void *pawn) {
     int capture = (!g_in_cmd && pawn);
     if (capture) {
         u8 *p = (u8 *)pawn;
         g_road_line.n = 0;
         ls(&g_road_line, "road "); lhex(&g_road_line, (u64)pawn);
-        int n = *(int *)(p + 0x798);
+        int n = *(int *)(p + P_ROADPTS + 8);
         if (n > 60) n = 60;
-        put_points(&g_road_line, p + 0x7b8, 1, 0x18, 0);
-        put_points(&g_road_line, *(u8 **)(p + 0x790), n, 0x18, 0);
+        put_points(&g_road_line, p + P_ROADSTART, 1, 0x18, 0);
+        put_points(&g_road_line, *(u8 **)(p + P_ROADPTS), n, 0x18, 0);
         g_in_commit = 2;                             // buildings made by a road commit: the replay remakes them
     }
-    int before = pawn ? *(int *)((u8 *)pawn + 0x798) : 0;
-    g_road_orig(pawn);
+    int before = pawn ? *(int *)((u8 *)pawn + P_ROADPTS + 8) : 0;
+    void *made = g_road_orig(pawn);
     g_in_commit = 0;
-    if (capture && before > 0 && *(int *)((u8 *)pawn + 0x798) == 0) lend_to(&g_road_line, g_out_path);
+    if (capture && before > 0 && *(int *)((u8 *)pawn + P_ROADPTS + 8) == 0) lend_to(&g_road_line, g_out_path);
+    return made;
 }
 
 static int install_hooks(void) {
     g_setup_orig = (setup_fn)install_hook(S_SETUP, 18, (void *)&hook_setup);
     g_field_orig = (pawn_fn)install_hook(S_FIELD, 19, (void *)&hook_field);
-    g_road_orig = (pawn_fn)install_hook(S_ROAD, 18, (void *)&hook_road);
+    g_road_orig = (pawn_fn)install_hook(S_ROAD, 15, (void *)&hook_road);  // push x5 + lea rbp
     return g_setup_orig && g_field_orig && g_road_orig;
 }
 
@@ -364,7 +387,7 @@ static __declspec(noinline) void cmd_build(const wchar *s, int remote) {
     if (b) {
         if (reg) ((fro_fn)(g_base + g_sigs[S_FRO].rva))(b, (void *)reg);
         ((setup_fn)(g_base + g_sigs[S_SETUP].rva))(b);
-        ((finish_fn)(g_base + g_sigs[S_FINISH].rva))(b, (u8 *)b + 0x5f8);
+        ((finish_fn)(g_base + g_sigs[S_FINISH].rva))(b, (u8 *)b + B_TRIANG);
     }
     g_in_cmd = 0;
     ls(&l, "build: "); lhex(&l, (u64)b); ls(&l, " type "); ldec(&l, (i64)t); lend(&l);
@@ -416,21 +439,21 @@ static __declspec(noinline) void cmd_fieldbuild(const wchar *s) {
     u8 *b = (u8 *)((spawn_fn)(g_base + g_sigs[S_SPAWN].rva))((void *)eng, (int)t, loc, rot);
     if (!b) { g_in_cmd = 0; ls(&l, "fieldbuild: spawn failed"); lend(&l); return; }
     const wchar *r = word(s, "P");
-    if (r) r = fill_points(r, b + 0x5e0);
+    if (r) r = fill_points(r, b + B_FIELDPTS);
     if (r) r = word(r, "B");
-    if (r) r = fill_points(r, b + 0x628);
+    if (r) r = fill_points(r, b + B_BORDER);
     if (r) r = word(r, "H");
     if (r) r = fill_hex(r, b + FB_G1, FB_G1N);
     if (r) r = fill_hex(r, b + FB_G2, FB_G2N);
     if (!r) { ls(&l, "fieldbuild: bad payload (building kept, shape may be partial)"); lend(&l); }
-    *(int *)(b + 0x488) = (int)workers;
-    b[0x3b1] = (u8)flag;
-    b[0x5f0] = (u8)cw;
+    *(int *)(b + B_WORKERS) = (int)workers;
+    b[B_FLAG] = (u8)flag;
+    b[B_CLOCKWISE] = (u8)cw;
     if (reg) ((fro_fn)(g_base + g_sigs[S_FRO].rva))(b, (void *)reg);
     ((setup_fn)(g_base + g_sigs[S_SETUP].rva))(b);
     g_in_cmd = 0;
     ls(&l, "fieldbuild: "); lhex(&l, (u64)b); ls(&l, " type "); ldec(&l, (i64)t);
-    ls(&l, " points "); ldec(&l, *(int *)(b + 0x5e8)); ls(&l, " border "); ldec(&l, *(int *)(b + 0x630)); lend(&l);
+    ls(&l, " points "); ldec(&l, *(int *)(b + B_FIELDPTS + 8)); ls(&l, " border "); ldec(&l, *(int *)(b + B_BORDER + 8)); lend(&l);
 }
 
 // testfield <same as fieldbuild>: the lab bot's stand-in for a player's commitField. Same build,
@@ -452,10 +475,10 @@ static __declspec(noinline) void cmd_testfield(const wchar *s) {
     u8 *b = (u8 *)((spawn_fn)(g_base + g_sigs[S_SPAWN].rva))((void *)eng, (int)t, loc, rot);
     if (b) {
         const wchar *r = word(s, "P");
-        if (r) r = fill_points(r, b + 0x5e0);
+        if (r) r = fill_points(r, b + B_FIELDPTS);
         if (r) r = word(r, "B");
-        if (r) r = fill_points(r, b + 0x628);
-        *(int *)(b + 0x488) = (int)workers; b[0x3b1] = (u8)flag; b[0x5f0] = (u8)cw;
+        if (r) r = fill_points(r, b + B_BORDER);
+        *(int *)(b + B_WORKERS) = (int)workers; b[B_FLAG] = (u8)flag; b[B_CLOCKWISE] = (u8)cw;
         if (reg) ((fro_fn)(g_base + g_sigs[S_FRO].rva))(b, (void *)reg);
         ((setup_fn)(g_base + g_sigs[S_SETUP].rva))(b);
     }
@@ -464,7 +487,7 @@ static __declspec(noinline) void cmd_testfield(const wchar *s) {
     ls(&l, "testfield: "); lhex(&l, (u64)b); lend(&l);
 }
 
-// cursor <pawnHex> <x> <y> <z>: the pawn's ground point under the cursor (pawn+0x668, FVector),
+// cursor <pawnHex> <x> <y> <z>: the pawn's ground point under the cursor (P_CURSOR, FVector),
 // which fieldAddPoint uses; lets a replay place a passive lord's field points
 static __declspec(noinline) void cmd_cursor(const wchar *s) {
     line_t l = {0};
@@ -472,8 +495,42 @@ static __declspec(noinline) void cmd_cursor(const wchar *s) {
     if (!(s = parse_hex(s, &pawn)) || !(s = parse_num(s, &x)) || !(s = parse_num(s, &y)) || !(s = parse_num(s, &z)) || !pawn) {
         ls(&l, "cursor: bad arguments"); lend(&l); return;
     }
-    double *v = (double *)((u8 *)pawn + 0x668);
+    double *v = (double *)((u8 *)pawn + P_CURSOR);
     v[0] = x; v[1] = y; v[2] = z;
+}
+
+// peek <buildingHex>: debug - the building's B_MARKERS component and whether it still looks like a
+// live object (vtable inside the exe image). Reads only committed, readable memory.
+static u64 g_image_size;
+static int readable(const void *p, u64 n) {
+    u8 mbi[48];                                  // MEMORY_BASIC_INFORMATION (x64)
+    if (!p || VirtualQuery(p, mbi, sizeof(mbi)) != sizeof(mbi)) return 0;
+    u64 base = *(u64 *)mbi, size = *(u64 *)(mbi + 24);
+    u32 state = *(u32 *)(mbi + 32), prot = *(u32 *)(mbi + 36);
+    if (state != 0x1000 /*MEM_COMMIT*/ || prot == 0 || (prot & 0x101) /*NOACCESS|GUARD*/) return 0;
+    return (u64)p + n <= base + size;
+}
+static int in_image(u64 v) { return v >= (u64)g_base && v < (u64)g_base + g_image_size; }
+static __declspec(noinline) void cmd_peek(const wchar *s) {
+    line_t l = {0};
+    u64 b;
+    if (!parse_hex(s, &b) || !readable((void *)b, B_MARKERS + 8)) { ls(&l, "peek: bad address"); lend(&l); return; }
+    u64 c = *(u64 *)(b + B_MARKERS);
+    ls(&l, "peek "); lhex(&l, b); ls(&l, in_image(*(u64 *)b) ? " alive" : " DEAD");
+    ls(&l, " type "); ldec(&l, *(int *)(b + B_TYPE)); ls(&l, " markers "); lhex(&l, c);
+    if (c && !readable((void *)c, 0x10)) ls(&l, " UNMAPPED");
+    else if (c) { ls(&l, in_image(*(u64 *)c) ? " ok" : " FREED"); ls(&l, " flags "); lhex(&l, *(u32 *)(c + 8)); }
+    lend(&l);
+}
+
+// hover <pawnHex> <buildingHex|0>: lab - what the cursor does when it moves onto a building (or off
+// every building): the pawn's hovered building changes, hiding the old one's markers, showing the new one's
+typedef void (*hover_fn)(void *pawn, void *building);
+static __declspec(noinline) void cmd_hover(const wchar *s) {
+    line_t l = {0};
+    u64 pawn, b;
+    if (!(s = parse_hex(s, &pawn)) || !parse_hex(s, &b) || !pawn) { ls(&l, "hover: bad arguments"); lend(&l); return; }
+    ((hover_fn)(g_base + g_sigs[S_HOVER].rva))((void *)pawn, (void *)b);
 }
 
 // srand <seed>: seed the C runtime generator the game's FMath::Rand uses
@@ -515,6 +572,12 @@ static int safe_name(const char *n) {
     }
     return n[0] != '.';
 }
+// the protocol only ever transfers the shared world: coop_world.sav, coop_world_descr.sav, coop_world_coat_N.png
+static int world_file(const char *n) {
+    const char *w = "coop_world";
+    while (*w) if (*n++ != *w++) return 0;
+    return 1;
+}
 
 // receive loop: lines -> inbox "MSG <line>", "FILE <name> <len>\n<bytes>" -> saves dir
 // one connection at a time, so the receive buffers can be static
@@ -551,7 +614,8 @@ static __declspec(noinline) void recv_loop(SOCKET s) {
                     i64 len = 0;
                     while (linebuf[p] == ' ') p++;
                     while (linebuf[p] >= '0' && linebuf[p] <= '9') len = len * 10 + (linebuf[p++] - '0');
-                    if (!safe_name(fname) || len <= 0 || len > 512ll * 1024 * 1024) {
+                    // only a guest receives files, and only the world (never overwrite other saves)
+                    if (g_net_role != 2 || !safe_name(fname) || !world_file(fname) || len <= 0 || len > 512ll * 1024 * 1024) {
                         inbox("NET error bad_file_header");
                         closesocket(s);
                         return;
@@ -711,6 +775,8 @@ static void __fastcall on_command(void *ctx, u8 *stack, void *result) {
     else if ((rest = word(s, "buildlocal"))) cmd_build(rest, 0);
     else if ((rest = word(s, "build"))) cmd_build(rest, 1);
     else if ((rest = word(s, "srand"))) cmd_srand(rest);
+    else if ((rest = word(s, "peek"))) cmd_peek(rest);
+    else if ((rest = word(s, "hover"))) cmd_hover(rest);
     else if ((rest = word(s, "cursor"))) cmd_cursor(rest);
     else if ((rest = word(s, "fieldbuild"))) cmd_fieldbuild(rest);
     else if ((rest = word(s, "testfield"))) cmd_testfield(rest);
@@ -758,6 +824,7 @@ int __stdcall DllMain(void *inst, u32 reason, void *reserved) {
     static const wchar lad[] = {'L','O','C','A','L','A','P','P','D','A','T','A',0};
     if (GetEnvironmentVariableW(lad, g_saves_dir, 400) > 0) wcat_a(g_saves_dir, 520, "\\ManorLords\\Saved\\SaveGames\\");
     g_base = (u8 *)GetModuleHandleW(0);
+    g_image_size = *(u32 *)(g_base + *(u32 *)(g_base + 0x3c) + 24 + 56);   // OptionalHeader.SizeOfImage
     line_t l = {0};
     ls(&l, "coopnative " MOD_VERSION " loaded, exe base "); lhex(&l, (u64)g_base); lend(&l);
     if (!check_build()) { ls(&l, "unknown game build: nothing installed"); lend(&l); inbox("NATIVE refused unknown_game_build"); return 1; }
