@@ -131,6 +131,10 @@ region =               # invité : région souhaitée (nom ou étiquette), facul
 - Routes, champs, parcelles d'habitation et bâtiments posés **à la souris** ont été reproduits dans
   les deux sens lors d'un essai sur un PC. La correction du plantage décrit plus haut attend encore
   la confirmation d'un deuxième essai à la souris.
+- Un plantage **intermittent** a été vu une fois (sur une dizaine d'essais), au moment où le script
+  de test ferme de force les fenêtres du jeu : la boucle des décalques de route des bâtiments
+  proches (`closeBuildings`) a trouvé une entrée nulle dans `roadDecals`. Aucun état anormal n'a été
+  trouvé pendant le jeu ; on ne sait pas encore si le jeu sans mod fait de même à la fermeture forcée.
 - Pas encore synchronisés : avancement des chantiers (un bâtiment de l'autre joueur apparaît
   directement terminé chez vous), **améliorations** de bâtiments, extensions de parcelles (jardins),
   stocks, villageois, armées, raids, commerce entre joueurs, trésor et influence.
