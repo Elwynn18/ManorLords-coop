@@ -7,7 +7,7 @@
 set -euo pipefail
 
 APPID=1363080
-EXE_SHA=813c4909dbe8bef3481469137c66f35cc23dec11c145b6963c4739b41539e621
+EXE_SHA=560451df38cd91134026c25b69539449c570f3163e33bc8c45b4dc20b6952cee
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PAYLOAD="$HERE/payload"
 ACTION=""; GAME_DIR=""; YES=0
@@ -85,9 +85,9 @@ fi
 say "  vérification de la version du jeu…"
 got=$(sha256sum "$EXE" | cut -d' ' -f1)
 if [ "$got" != "$EXE_SHA" ]; then
-  die "version du jeu non prise en charge (empreinte $got). Ce mod demande Manor Lords 0.8.104, build Steam 24905706."
+  die "version du jeu non prise en charge (empreinte $got). Ce mod demande Manor Lords, build Steam 26185246."
 fi
-ok "version du jeu : 0.8.104 (build 24905706)"
+ok "version du jeu : build Steam 26185246"
 
 if [ -f "$WIN64/ue4ss/UE4SS.dll" ] && [ -f "$WIN64/dwmapi.dll" ]; then
   if cmp -s "$WIN64/ue4ss/UE4SS.dll" "$PAYLOAD/ue4ss/ue4ss/UE4SS.dll"; then ok "UE4SS déjà installé (même version)"

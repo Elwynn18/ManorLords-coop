@@ -1,20 +1,20 @@
 #!/bin/sh
 # Build the distribution archive: release/<version>/ManorLords-Coop-<version>.zip
-#   payload/ue4ss          UE4SS v3.0.1-1183-gcdbc0b66 (dwmapi.dll + ue4ss/), from the pinned official zip
+#   payload/ue4ss          UE4SS v3.0.1-1196-g236adf26 (dwmapi.dll + ue4ss/), from the pinned official zip
 #   payload/ManorLordsCoop the Lua mod + coopnative.dll
 #   ManorLords-Coop.bat, manorlords-coop.sh, README.md, LICENSE, THIRD_PARTY/
-# Usage: ./release.sh <path to UE4SS_v3.0.1-1183-gcdbc0b66.zip>
+# Usage: ./release.sh <path to UE4SS_v3.0.1-1196-g236adf26.zip>
 set -eu
 cd "$(dirname "$0")"
 UE4SS_ZIP="$1"
-UE4SS_SHA=e4a47e23e2eeb8379c4fc388d1b1686f01c6c5930d84a2ee4a6a9574b274e681
+UE4SS_SHA=75dc8b081d324fe0598a87b26e37d13a84d3648cbb1d08eb48c514376407a11b
 VERSION=$(sed -n 's/^local VERSION = "\(.*\)"/\1/p' lua/ManorLordsCoop/Scripts/main.lua)
 echo "$UE4SS_SHA  $UE4SS_ZIP" | sha256sum -c -
 [ "${NOBUILD:-}" = 1 ] || ./native/build.sh
 OUT="release/$VERSION"; STAGE="$OUT/stage"
 rm -rf "$OUT"; mkdir -p "$STAGE/payload/ue4ss" "$STAGE/THIRD_PARTY"
 python3 -I -m zipfile -e "$UE4SS_ZIP" "$STAGE/payload/ue4ss"
-echo "UE4SS v3.0.1-1183-gcdbc0b66 (experimental-latest, sha256 $UE4SS_SHA)" > "$STAGE/payload/ue4ss/VERSION"
+echo "UE4SS v3.0.1-1196-g236adf26 (experimental-latest, sha256 $UE4SS_SHA)" > "$STAGE/payload/ue4ss/VERSION"
 cp "$STAGE/payload/ue4ss/ue4ss/LICENSE" "$STAGE/THIRD_PARTY/UE4SS-LICENSE"
 cp -r lua/ManorLordsCoop "$STAGE/payload/ManorLordsCoop"
 rm -f "$STAGE/payload/ManorLordsCoop/config.txt"

@@ -21,3 +21,4 @@ EnterCriticalSection
 LeaveCriticalSection
 DeleteFileW
 MoveFileExW
+VirtualQuery

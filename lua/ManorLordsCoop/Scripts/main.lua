@@ -9,7 +9,7 @@
 -- The native half (coopnative.dll, same folder) does what Lua cannot: TCP, building creation,
 -- the building capture hook. See docs/PROTOCOL.md.
 
-local VERSION = "0.1.0"
+local VERSION = "0.2.0"
 local PROTO = 1
 
 -- ------------------------------------------------------------------ paths and config
@@ -265,6 +265,7 @@ local function is_local_lord(name) return S.local_lords[name] == true end   -- f
 S.known = {}                 -- addr -> true: buildings already classified (sent, received, starters, existing)
 S.owner_of = {}              -- addr -> owner name when last checked ("" = none)
 S.road_made = {}             -- addr -> true: buildings a road commit or replay made
+S.remote_built = {}          -- addr -> type: buildings made here from the other side's BLD/FLD
 
 -- remember the current buildings of local lords, so a later disappearance can be reported
 local function track_existing()
@@ -354,6 +355,7 @@ local function apply_bld(lord, btype, x, y, z, yaw, shape)
     for _, e in ipairs(outbox_events()) do
         local b = bm[e.addr]
         if e.remote and valid(b) then
+            S.remote_built[e.addr] = btype
             S.known[e.addr] = true
             if not same(b.ownerPawn, pawn) then b.ownerPawn = pawn end
             S.owner_of[e.addr] = lord
@@ -491,7 +493,10 @@ local function apply_rm(lord, x, y)
             if d < bd then best, bd = b, d end
         end
     end
-    if best and bd < 100 * 100 then remove_building(best) else status("WARN RM: no building of " .. lord .. " near " .. x .. "," .. y) end
+    if best and bd < 100 * 100 then
+        status(string.format("removed a building of %s at %.0f,%.0f (0x%x)", lord, x, y, best:GetAddress()))
+        remove_building(best)
+    else status("WARN RM: no building of " .. lord .. " near " .. x .. "," .. y) end
 end
 
 -- ------------------------------------------------------------------ world transfer (host)
@@ -815,13 +820,13 @@ function Bot.start_new_game()
     end
     menu:startNewGame()
 end
-function Bot.build_some(lord, n)
+function Bot.build_some(lord, n, types)
     local p = find_lord(lord)
     local home = nil
     for _, b in ipairs(buildings()) do if same(b.ownerPawn, p) then home = b:K2_GetActorLocation(); break end end
     if not home then status("BOT no home for " .. lord); return end
     local eng = engine()
-    local types = { 3, 3, 13, 4, 3 }
+    types = types or { 3, 3, 13, 4, 3 }
     for i = 1, n do
         local ang = (i / n) * 6.283
         local loc = { X = home.X + math.cos(ang) * 2500, Y = home.Y + math.sin(ang) * 2500, Z = home.Z }
@@ -829,6 +834,33 @@ function Bot.build_some(lord, n)
         native(string.format("buildlocal %d %.1f %.1f %.1f %.2f %x %x", types[(i - 1) % #types + 1], loc.X, loc.Y, loc.Z, i * 30.0, eng:GetAddress(), valid(r) and r:GetAddress() or 0))
     end
     status("BOT built " .. n .. " for " .. lord)
+end
+function Bot.remove_type(lord, t)
+    local p = find_lord(lord)
+    for _, bb in ipairs(buildings()) do
+        if same(bb.ownerPawn, p) and building_types[bb:GetAddress()] == t then
+            remove_building(bb)
+            status("BOT removed a type " .. t .. " of " .. lord)
+            return
+        end
+    end
+    status("BOT no type " .. t .. " of " .. lord .. " to remove")
+end
+-- log changes of the local pawn's hovered building; every 2 s, peek the markers of replayed buildings
+function Bot.watch_hover()
+    local b = S.bot
+    local h = nil
+    pcall(function() h = engine().playerRef.hitBuilding end)
+    local ha = 0
+    pcall(function() if h ~= nil then ha = h:GetAddress() end end)
+    if ha ~= (b.hover or 0) then
+        b.hover = ha
+        status(string.format("hover 0x%x%s%s", ha, S.remote_built[ha] and (" (replayed type " .. S.remote_built[ha] .. ")") or "",
+            (ha ~= 0 and not valid(h)) and " STALE" or ""))
+    end
+    if b.t % 2 == 0 then
+        for addr in pairs(S.remote_built) do native(string.format("peek %x", addr)) end
+    end
 end
 function Bot.remove_one(lord)
     local p = find_lord(lord)
@@ -990,7 +1022,15 @@ function Bot.tick()
             end
         end
         if t == 40 then
-            status("ROADSTATE count=" .. #(FindAllOf("Road") or {}))
+            -- like buildings(): actors parked at the origin are placeholders, not placed roads
+            local n = 0
+            for _, r in ipairs(FindAllOf("Road") or {}) do
+                if valid(r) then
+                    local l = r:K2_GetActorLocation()
+                    if not (l.X == 0 and l.Y == 0 and l.Z == 0) then n = n + 1 end
+                end
+            end
+            status("ROADSTATE count=" .. n)
             Bot.state(); status("RESULT: PASS roads (compare ROADSTATE)"); b.done = true
         end
     elseif TEST == "campaign" then
@@ -1041,6 +1081,36 @@ function Bot.tick()
                 b.done = true
             end
         end
+    elseif TEST == "manual" then
+        -- a person plays: log what the local cursor hovers and, every 2 s, the marker component of
+        -- every building replayed here (native.log "peek" lines)
+        Bot.watch_hover()
+    elseif TEST == "hoverrm" then
+        -- the bot's stand-in for a cursor (native "hover"): the guest hovers a building the host made,
+        -- the host demolishes it, then the guest's cursor moves on while garbage collection runs
+        if S.role == "host" and not b.ready then
+            if S.guest_settled then b.ready = true; b.t0 = b.t end
+            return
+        end
+        if S.role == "join" and not b.ready then b.ready = true; b.t0 = b.t end
+        local t = b.t - b.t0
+        if S.role == "host" then
+            if t == 5 then Bot.build_some(me, 2, { 113, 4 }) end
+            if t == 40 then Bot.remove_type(me, 113) end
+            if t == 200 then Bot.state(); status("RESULT: PASS hoverrm (host)"); b.done = true end
+            return
+        end
+        local pawn = engine().playerRef
+        local function hover(addr) native(string.format("hover %x %x", pawn:GetAddress(), addr)) end
+        local r113, r4 = nil, nil
+        for _, bb in ipairs(buildings()) do
+            local bt = S.remote_built[bb:GetAddress()]
+            if bt == 113 then r113 = bb:GetAddress() elseif bt == 4 then r4 = bb:GetAddress() end
+        end
+        if t >= 10 and t < 60 and r113 then hover(r113) end            -- the cursor rests on it
+        if t >= 60 and t <= 190 and t % 5 == 0 then hover(t % 10 == 0 and (r4 or 0) or 0) end
+        Bot.watch_hover()
+        if t == 195 then Bot.state(); status("RESULT: PASS hoverrm (guest survived)"); b.done = true end
     elseif TEST == "fields" then
         if S.role == "host" and not b.ready then
             if S.guest_settled then b.ready = true; b.t0 = b.t end
@@ -1112,7 +1182,9 @@ LoopAsync(250, function()
                         track_existing()
                         S.road_count = #(FindAllOf("Road") or {})
                         native("net host " .. CFG.port)
-                        status("hosting on port " .. CFG.port .. " as " .. lord_name(engine().playerRef))
+                        local gv = ""
+                        pcall(function() gv = str(FindFirstOf("BP_MLGameInstance_C").Version) end)
+                        status("hosting on port " .. CFG.port .. " as " .. lord_name(engine().playerRef) .. " (game " .. gv .. ")")
                     end
                 elseif S.role == "join" then
                     if not S.join_started and native_ok then
